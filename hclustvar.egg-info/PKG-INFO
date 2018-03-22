@@ -1,0 +1,16 @@
+Metadata-Version: 1.1
+Name: hclustvar
+Version: 0.1.0
+Summary: Package for hierarchical clustering of mixed variables: numeric and/or categorical.
+Home-page: https://github.com/niwy/hclustvar
+Author: niwy
+Author-email: weiyuan.ni@hotmail.com
+License: MIT
+Description-Content-Type: UNKNOWN
+Description: UNKNOWN
+Keywords: hierarchical clustering,mixed variables
+Platform: all
+Classifier: Intended Audience :: Data Scientists
+Classifier: License :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Data Mining :: Variable Analysis

@@ -75,7 +75,7 @@ def recode_var(df_quant, df_quali):
 
     if df_quant is not None and df_quali is None:
         df_out = df_quant_recode
-        index_var = range(0, len(df_quali.columns))
+        index_var = list(range(0, len(df_quant.columns)))
 
     if df_quant is None and df_quali is not None:
         df_out = df_quali_recode

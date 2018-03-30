@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from hclustvar.recode import recode_var
-from numpy.linalg import svd
+import scipy.linalg as la
 from scipy.cluster.hierarchy import cut_tree
 from hclustvar.mixedvarsim import mixed_var_sim
 import sys
@@ -16,18 +16,34 @@ class HClusterResult:
     Z = None          # HClustering result matrix, compatible with scipy.cluster.hierarchy
 
 
-# Return the first engienvalue as matrix score
-def cluster_score(mat):
-    n_row = mat.shape[0]
-    _, s, _ = svd(mat / np.sqrt(n_row))
-    return s[0]
+# Return the largest eigenvalue as matrix score
+def cluster_score(mat_in):
+    nrow, ncol = mat_in.shape
+    if ncol == 1:
+        e_val = 1
+        f = mat_in
+    else:
+        mat_t = mat_in / np.sqrt(nrow)
+        mat_t -= np.mean(mat_t, axis=0)
+        # calculate the covariance matrix
+        C = np.corrcoef(mat_t, rowvar=0)
+        e_vals, e_vecs = la.eig(C)
+        e_vals = list(e_vals.real)
+        idx = e_vals.index(max(e_vals))
+        e_val = e_vals[idx]
+        f = mat_in @ e_vecs[:, idx]
+    return e_val, f
 
 
 # calculate dissimilarity between two cluster of variables
 # based on the idea of PCA, a smaller output value indicates two clusters are more correlated
 def cluster_diss(mat_a, mat_b):
     mat_ab = np.concatenate((mat_a, mat_b), axis=1)
-    return cluster_score(mat_a)**2 + cluster_score(mat_b)**2 - cluster_score(mat_ab)**2
+    valproA, _ = cluster_score(mat_a)
+    valproB, _ = cluster_score(mat_b)
+    valproAUB, _ = cluster_score(mat_ab)
+    crit = valproA + valproB - valproAUB
+    return (crit)
 
 
 # get nearest neighbor for each cluster
@@ -61,7 +77,11 @@ def get_nn_var(diss_mat, flag):
 # The distance between clusters z[i, 0] and z[i, 1] is given by z[i, 2].
 # The fourth value z[i, 3] represents the number of original observations in the newly formed cluster.
 def hcluster_var(df_quant=None, df_quali=None):
-    n_var = len(df_quant.columns) + len(df_quali.columns)
+    n_var = 0
+    if df_quant is not None:
+        n_var += len(df_quant.columns)
+    if df_quali is not None:
+        n_var += len(df_quali.columns)
     if n_var <= 2:
         sys.exit('Error: The number of variables must be greater than 2!')
 
@@ -74,10 +94,13 @@ def hcluster_var(df_quant=None, df_quali=None):
     diss = np.zeros((n_var, n_var))       # dissimilarity matrix between variables
     for i in range(0, n_var):
         for j in range(i+1, n_var):
-            index_bool = pd.Series(index_rec).isin([i, j]).values
-            mat_ij = df_rec.ix[:, index_bool].values
-            _, s, _ = svd(mat_ij/np.sqrt(len(df_rec.index)))
-            diss[i, j] = 1 + 1 - s[0] * s[0]
+            index_i = pd.Series(index_rec).isin([i]).values
+            mat_i = df_rec.iloc[:, index_i].values
+
+            index_j = pd.Series(index_rec).isin([j]).values
+            mat_j = df_rec.iloc[:, index_j].values
+
+            diss[i, j] = cluster_diss(mat_i, mat_j)
             diss[j, i] = diss[i, j]
 
     # find the initial nearest neighbor for each cluster (variable)
@@ -119,9 +142,9 @@ def hcluster_var(df_quant=None, df_quali=None):
 
         # find variables in clus1 at the previous lower level
         index_col1 = [idx for idx, val in enumerate(clust_mat[:, n_col + 1]) if val == clus1]
-        xclus1 = df_rec.ix[:, pd.Series(index_rec).isin(index_col1).values]
+        xclus1 = df_rec.iloc[:, pd.Series(index_rec).isin(index_col1).values]
         index_col2 = [idx for idx, val in enumerate(clust_mat[:, n_col + 1]) if val == clus2]
-        xclus2 = df_rec.ix[:, pd.Series(index_rec).isin(index_col2).values]
+        xclus2 = df_rec.iloc[:, pd.Series(index_rec).isin(index_col2).values]
 
         # size of the new cluster
         new_cluster_size = len(index_col1) + len(index_col2)
@@ -135,20 +158,22 @@ def hcluster_var(df_quant=None, df_quali=None):
         right_clust[n_col] = clus2
 
         # update cluster indicators
-        for i in range(0, n_var):
-            clust_mat[i, n_col] = clust_mat[i, n_col + 1]
-            if clust_mat[i, n_col] == clus2:
-                clust_mat[i, n_col] = clus1
+        clust_mat[:, n_col] = clust_mat[:, n_col + 1]
+        ind1 = np.where(clust_mat[:, n_col] == clus1)[0]
+        ind2 = np.where(clust_mat[:, n_col] == clus2)[0]
+        clust_mat[ind2, n_col] = clus1
 
-            clust_mat_py[i, n_col] = clust_mat_py[i, n_col + 1]
-            if clust_mat_py[i, n_col] == clus1 or clust_mat_py[i, n_col] == clus2:
-                clust_mat_py[i, n_col] = new_cluster_id
+        clust_mat_py[:, n_col] = clust_mat_py[:, n_col + 1]
+        clus1_py = clust_mat_py[ind1, n_col][0]
+        clus2_py = clust_mat_py[ind2, n_col][0]
+        ind_py = np.isin(clust_mat_py[:, n_col], [clus1_py, clus2_py])
+        clust_mat_py[ind_py, n_col] = new_cluster_id
 
         # update dissimilarity between the combined cluster and the rest
         for i in range(0, n_var):
             if i != clus1 and i != clus2 and flag[i] == 1:
                 indicescol = [idx for idx, val in enumerate(clust_mat[:, n_col + 1]) if val == i]
-                mati = df_rec.ix[:, pd.Series(index_rec).isin(indicescol).values]
+                mati = df_rec.iloc[:, pd.Series(index_rec).isin(indicescol).values]
                 diss[clus1, i] = cluster_diss(xclus_new, mati)
                 diss[i, clus1] = diss[clus1, i]
         for i in range(0, n_var):
@@ -182,19 +207,15 @@ def cutree(hclust_result, n_cluster, cal_sim_mat=False):
     var_set = {}
     sim_set = {}
     for g in range(0, n_cluster):
-        zclass = df_rec.ix[:, pd.Series(indexk).isin([g]).values]
-        n_row = zclass.shape[0]
-        u, d, _ = svd(zclass / np.sqrt(n_row))
-        latent_f = pd.DataFrame(u[:, 0] * d[0] * np.sqrt(n_row))
-
+        zclass = df_rec.iloc[:, pd.Series(indexk).isin([g]).values]
+        _, latent_f = cluster_score(zclass)
         indices_clus = [idx for idx, val in enumerate(clust_result) if val == g]
-
         col_names = list(df_x.iloc[:, indices_clus])
 
         df_squared_loading = pd.DataFrame(columns=['Squared-Loading'], index=col_names)
         for i in range(0, len(indices_clus)):
             col = col_names[i]
-            df_squared_loading.loc[col, 'Squared-Loading'] = mixed_var_sim(latent_f, df_x[[col]])
+            df_squared_loading.loc[col, 'Squared-Loading'] = mixed_var_sim(pd.DataFrame(data=latent_f), df_x[[col]])
         var_set[g] = df_squared_loading
 
         df_sim = pd.DataFrame(np.ones((len(col_names), len(col_names))), columns=col_names, index=col_names)
